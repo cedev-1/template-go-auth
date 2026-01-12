@@ -7,12 +7,16 @@ import (
 
 // RefreshToken represents a refresh token stored in the database.
 type RefreshToken struct {
-	ID        uint      `json:"-" gorm:"primaryKey"`
-	UserID    uint      `json:"-" gorm:"index;not null"`
-	Token     string    `json:"-" gorm:"uniqueIndex;not null"`
-	ExpiresAt time.Time `json:"-" gorm:"not null"`
-	CreatedAt time.Time `json:"-"`
-	Revoked   bool      `json:"-" gorm:"default:false"`
+	ID            uint      `json:"-" gorm:"primaryKey"`
+	UserID        uint      `json:"-" gorm:"index;not null"`
+	Token         string    `json:"-" gorm:"uniqueIndex;not null"`
+	ExpiresAt     time.Time `json:"-" gorm:"not null"`
+	CreatedAt     time.Time `json:"-"`
+	Revoked       bool      `json:"-" gorm:"default:false;index"`
+	RevokedAt     time.Time `json:"-" gorm:"default:null"`
+	UpdatedAt     time.Time `json:"-" gorm:"default:null"`
+	ParentTokenID *uint     `json:"-"`
+	TokenFamily   string    `json:"-" gorm:"index;not null"`
 }
 
 // TableName specifies the table name for GORM.
@@ -28,4 +32,28 @@ func (r *RefreshToken) IsExpired() bool {
 // IsValid checks if the refresh token is valid (not expired and not revoked).
 func (r *RefreshToken) IsValid() bool {
 	return !r.Revoked && !r.IsExpired()
+}
+
+func (r *RefreshToken) Revoke() {
+	r.Revoked = true
+	r.RevokedAt = time.Now()
+}
+
+func (r *RefreshToken) UpdateTokenFamily(family string) {
+	r.TokenFamily = family
+	r.UpdatedAt = time.Now()
+}
+
+func (r *RefreshToken) UpdateRefreshTokenAndParentToken(token string, expiresAt time.Time, parentToken *uint) {
+	r.Token = token
+	r.ExpiresAt = expiresAt
+	r.ParentTokenID = parentToken
+	r.UpdatedAt = time.Now()
+}
+
+func (r *RefreshToken) UpdateRefreshTokenAndTokenFamily(token string, expiresAt time.Time, family string) {
+	r.Token = token
+	r.ExpiresAt = expiresAt
+	r.TokenFamily = family
+	r.UpdatedAt = time.Now()
 }

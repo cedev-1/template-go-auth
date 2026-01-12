@@ -49,6 +49,7 @@ func AuthMiddleware(jwtCfg config.JWTConfig) gin.HandlerFunc {
 		}
 
 		// Extract claims and set in context.
+		// Feature add more check claims
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
 			userID, ok := claims["user_id"].(float64)
 			if !ok {
