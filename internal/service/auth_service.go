@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	// RefreshTokenLength is the length of the refresh token in bytes.
 	RefreshTokenLength = 32
-	// RefreshTokenExpiryDays is the default refresh token expiry in days.
-	RefreshTokenExpiryDays = 30
+	RefreshTokenExpiryDays = 1
+	MaxActiveTokensPerUser = 1
+	TokenFamilyLength = 16
 )
 
 // authService implements AuthService.
@@ -28,6 +28,13 @@ type authService struct {
 	refreshTokenRepo repository.RefreshTokenRepository
 	hasher           password.Hasher
 	jwtCfg           config.JWTConfig
+}
+
+// SessionInfo represents information about an active session.
+type SessionInfo struct {
+	ID        uint      `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // NewAuthService creates a new AuthService instance.
@@ -43,6 +50,41 @@ func NewAuthService(
 		hasher:           hasher,
 		jwtCfg:           jwtCfg,
 	}
+}
+
+func (s *authService) generateTokenPairWithFamily(
+	ctx context.Context,
+	user *domain.User,
+	tokenFamily string,
+	parentTokenID *uint,
+) (*TokenPair, error) {
+
+	accessToken, err := s.generateAccessToken(user)
+	if err != nil {
+		return nil, err
+	}
+
+	refreshToken, err := s.generateRefreshToken()
+	if err != nil {
+		return nil, err
+	}
+
+	refreshTokenEntity := &domain.RefreshToken{
+		UserID:        user.ID,
+		Token:         refreshToken,
+		TokenFamily:   tokenFamily,
+		ParentTokenID: parentTokenID,
+		ExpiresAt:     time.Now().UTC().AddDate(0, 0, RefreshTokenExpiryDays),
+	}
+
+	if err := s.refreshTokenRepo.Create(ctx, refreshTokenEntity); err != nil {
+		return nil, err
+	}
+
+	return &TokenPair{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+	}, nil
 }
 
 // Register creates a new user account.
@@ -76,8 +118,8 @@ func (s *authService) Register(ctx context.Context, email, pass string) (*domain
 }
 
 // Login authenticates a user and returns a token pair.
+// service/auth.go
 func (s *authService) Login(ctx context.Context, email, pass string) (*TokenPair, error) {
-	// Find the user.
 	user, err := s.userRepo.FindByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, domain.ErrUserNotFound) {
@@ -86,44 +128,77 @@ func (s *authService) Login(ctx context.Context, email, pass string) (*TokenPair
 		return nil, err
 	}
 
-	// Check the password.
 	if !s.hasher.Check(pass, user.PasswordHash) {
 		return nil, domain.ErrInvalidCredentials
 	}
 
-	// Generate token pair.
-	return s.generateTokenPair(ctx, user)
+	// ✅ Utiliser une transaction pour garantir l'atomicité
+	var pair *TokenPair
+	err = s.refreshTokenRepo.WithTransaction(ctx, func(tx repository.RefreshTokenRepository) error {
+		count, err := tx.CountActiveTokensByUser(ctx, user.ID)
+		if err != nil {
+			return err
+		}
+
+		if count >= MaxActiveTokensPerUser {
+			tokens, err := tx.GetActiveTokensByUser(ctx, user.ID)
+			if err != nil {
+				return err
+			}
+
+			if len(tokens) > 0 {
+				// Révoquer le plus ancien
+				oldest := tokens[len(tokens)-1]
+				if err := tx.RevokeByToken(ctx, oldest.Token); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Générer le nouveau token pair
+		pair, err = s.generateTokenPair(ctx, user)
+		return err
+	})
+
+	return pair, err
 }
 
 // Refresh exchanges a valid refresh token for a new token pair.
 func (s *authService) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
-	// Find the refresh token.
-	token, err := s.refreshTokenRepo.FindByToken(ctx, refreshToken)
-	if err != nil {
-		return nil, err
-	}
+	var pair *TokenPair
 
-	// Check if token is valid.
-	if token.Revoked {
-		return nil, domain.ErrTokenRevoked
-	}
-	if token.IsExpired() {
-		return nil, domain.ErrTokenExpired
-	}
+	err := s.refreshTokenRepo.WithTransaction(ctx, func(tx repository.RefreshTokenRepository) error {
+		token, err := tx.RotateByToken(ctx, refreshToken)
+		if err != nil {
+			if errors.Is(err, domain.ErrTokenRevoked) {
+				if token != nil && token.TokenFamily != "" {
+					_ = tx.RevokeTokenFamily(ctx, token.TokenFamily)
+				}
+			}
+			return err
+		}
 
-	// Revoke the old refresh token (rotation).
-	if err := s.refreshTokenRepo.RevokeByToken(ctx, refreshToken); err != nil {
-		return nil, err
-	}
+		if token.IsExpired() {
+			_ = tx.RevokeTokenFamily(ctx, token.TokenFamily)
+			return domain.ErrTokenExpired
+		}
 
-	// Get the user.
-	user, err := s.userRepo.FindByID(ctx, token.UserID)
-	if err != nil {
-		return nil, err
-	}
+		user, err := s.userRepo.FindByID(ctx, token.UserID)
+		if err != nil {
+			return err
+		}
 
-	// Generate new token pair.
-	return s.generateTokenPair(ctx, user)
+		pair, err = s.generateTokenPairWithFamily(
+			ctx,
+			user,
+			token.TokenFamily,
+			&token.ID,
+		)
+
+		return err
+	})
+
+	return pair, err
 }
 
 // Logout revokes a refresh token.
@@ -141,27 +216,31 @@ func (s *authService) GetUserByID(ctx context.Context, id uint) (*domain.User, e
 	return s.userRepo.FindByID(ctx, id)
 }
 
-// generateTokenPair creates an access token and refresh token for the user.
 func (s *authService) generateTokenPair(ctx context.Context, user *domain.User) (*TokenPair, error) {
-	// Generate access token.
 	accessToken, err := s.generateAccessToken(user)
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate refresh token.
 	refreshToken, err := s.generateRefreshToken()
 	if err != nil {
 		return nil, err
 	}
 
-	// Store refresh token in database.
-	refreshTokenEntity := &domain.RefreshToken{
-		UserID:    user.ID,
-		Token:     refreshToken,
-		ExpiresAt: time.Now().AddDate(0, 0, RefreshTokenExpiryDays),
+	familyBytes := make([]byte, TokenFamilyLength)
+	if _, err := rand.Read(familyBytes); err != nil {
+		return nil, err
 	}
-	if err := s.refreshTokenRepo.Create(ctx, refreshTokenEntity); err != nil {
+	tokenFamily := base64.RawURLEncoding.EncodeToString(familyBytes)
+
+	entity := &domain.RefreshToken{
+		UserID:      user.ID,
+		Token:       refreshToken,
+		TokenFamily: tokenFamily,
+		ExpiresAt:   time.Now().UTC().AddDate(0, 0, RefreshTokenExpiryDays),
+	}
+
+	if err := s.refreshTokenRepo.Create(ctx, entity); err != nil {
 		return nil, err
 	}
 
@@ -169,6 +248,41 @@ func (s *authService) generateTokenPair(ctx context.Context, user *domain.User) 
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	}, nil
+}
+
+func (s *authService) GetActiveSessions(ctx context.Context, userID uint) ([]*SessionInfo, error) {
+	tokens, err := s.refreshTokenRepo.GetActiveTokensByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	sessions := make([]*SessionInfo, len(tokens))
+	for i, token := range tokens {
+		sessions[i] = &SessionInfo{
+			ID:        token.ID,
+			CreatedAt: token.CreatedAt,
+			ExpiresAt: token.ExpiresAt,
+		}
+	}
+
+	return sessions, nil
+}
+
+// RevokeSession revokes a specific session by token ID.
+func (s *authService) RevokeSession(ctx context.Context, userID, tokenID uint) error {
+	// Find the token to ensure it belongs to the user.
+	tokens, err := s.refreshTokenRepo.GetActiveTokensByUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	for _, token := range tokens {
+		if token.ID == tokenID {
+			return s.refreshTokenRepo.RevokeByToken(ctx, token.Token)
+		}
+	}
+
+	return domain.ErrRefreshTokenNotFound
 }
 
 // generateAccessToken creates a JWT access token for the user.
