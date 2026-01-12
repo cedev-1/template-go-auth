@@ -2,8 +2,10 @@
 package container
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/cedev-1/template-go-auth/internal/config"
 	"github.com/cedev-1/template-go-auth/internal/domain"
@@ -13,6 +15,7 @@ import (
 	"github.com/cedev-1/template-go-auth/internal/service"
 	"github.com/cedev-1/template-go-auth/pkg/password"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -22,6 +25,7 @@ import (
 type Container struct {
 	Config      *config.Config
 	DB          *gorm.DB
+	RedisClient *redis.Client
 	Router      *gin.Engine
 	AuthHandler *handler.AuthHandler
 }
@@ -35,6 +39,10 @@ func New(cfg *config.Config) (*Container, error) {
 	// Initialize database.
 	if err := container.initDatabase(); err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
+	}
+	// Initialize Redis.
+	if err := container.initRedis(); err != nil {
+		return nil, fmt.Errorf("failed to initialize Redis: %w", err)
 	}
 
 	// Initialize all dependencies.
@@ -66,6 +74,27 @@ func (c *Container) initDatabase() error {
 
 	c.DB = db
 	log.Println("Database connected and migrations completed")
+	return nil
+}
+
+func (c *Container) initRedis() error {
+	opt := &redis.Options{
+		Addr:     fmt.Sprintf("%s:%d", c.Config.Redis.Host, c.Config.Redis.Port),
+		Password: c.Config.Redis.Password,
+		DB:       0,
+	}
+
+	client := redis.NewClient(opt)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("failed to ping Redis: %w", err)
+	}
+
+	c.RedisClient = client
+	log.Println("Redis connected successfully")
 	return nil
 }
 

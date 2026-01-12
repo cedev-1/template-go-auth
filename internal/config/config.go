@@ -13,6 +13,7 @@ type Config struct {
 	Database DatabaseConfig
 	JWT      JWTConfig
 	Server   ServerConfig
+	Redis    RedisConfig
 }
 
 // DatabaseConfig holds database configuration.
@@ -22,6 +23,12 @@ type DatabaseConfig struct {
 	User     string
 	Password string
 	Name     string
+}
+
+type RedisConfig struct {
+	Host     string
+	Port     int
+	Password string
 }
 
 // JWTConfig holds JWT configuration.
@@ -36,6 +43,12 @@ type ServerConfig struct {
 	GinMode string
 }
 
+type redis struct {
+	Host     string
+	Port     int
+	Password string
+}
+
 // Load loads configuration from environment variables.
 func Load() (*Config, error) {
 	// Load .env file if it exists (ignore error if not found).
@@ -46,6 +59,12 @@ func Load() (*Config, error) {
 		expiryHours = 24
 	}
 
+	redisPortStr := getEnv("REDIS_PORT", "6379")
+	redisPort, err := strconv.Atoi(redisPortStr)
+	if err != nil {
+		redisPort = 6379
+	}
+
 	return &Config{
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -53,6 +72,11 @@ func Load() (*Config, error) {
 			User:     getEnv("DB_USER", "postgres"),
 			Password: getEnv("DB_PASSWORD", "postgres"),
 			Name:     getEnv("DB_NAME", "auth_db"),
+		},
+		Redis: RedisConfig{
+			Host:     getEnv("REDIS_HOST", "localhost"),
+			Password: getEnv("REDIS_PASSWORD", "redis"),
+			Port:     redisPort,
 		},
 		JWT: JWTConfig{
 			Secret:      getEnv("JWT_SECRET", "default-secret-change-me"),
