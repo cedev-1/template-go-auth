@@ -122,6 +122,13 @@ func (c *Container) setupRouter() *gin.Engine {
 		protected.POST("/logout-all", c.AuthHandler.LogoutAll)
 	}
 
+	protected_sessions := router.Group("/auth/session")
+	protected_sessions.Use(middleware.AuthMiddleware(c.Config.JWT))
+	{
+		protected_sessions.POST("/revoke", c.AuthHandler.RevokeSession)
+		protected_sessions.GET("/active-sessions", c.AuthHandler.GetSessions)
+	}
+
 	return router
 }
 

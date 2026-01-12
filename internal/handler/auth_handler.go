@@ -210,7 +210,52 @@ func (h *AuthHandler) LogoutAll(c *gin.Context) {
 	})
 }
 
-// Me returns the current authenticated user.
+// GetSessions retrieves all active sessions for the authenticated user.
+func (h *AuthHandler) GetSessions(c *gin.Context) {
+	userID, exists := middleware.GetUserID(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	sessions, err := h.authService.GetActiveSessions(c.Request.Context(), userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve sessions"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+}
+
+// RevokeSession revokes a specific session.
+func (h *AuthHandler) RevokeSession(c *gin.Context) {
+	userID, exists := middleware.GetUserID(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req struct {
+		SessionID uint `json:"session_id" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.authService.RevokeSession(c.Request.Context(), userID, req.SessionID); err != nil {
+		if errors.Is(err, domain.ErrRefreshTokenNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke session"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "session revoked successfully"})
+}
+
 func (h *AuthHandler) Me(c *gin.Context) {
 	userID, ok := middleware.GetUserID(c)
 	if !ok {
