@@ -1,6 +1,6 @@
 # Go Auth Template
 
-> **Version:** 1.0.0 | [Changelog](CHANGELOG.md)
+> **Version:** 1.1.0 | [Changelog](CHANGELOG.md)
 
 Clean, production-ready authentication backend template built with Go, Gin, and Gorm.
 
@@ -20,6 +20,8 @@ Clean, production-ready authentication backend template built with Go, Gin, and 
 - User registration and login
 - JWT authentication with refresh tokens
 - Stateful token rotation and revocation
+- Session management with active session listing and revocation
+- Token family-based reuse detection
 - Clean Architecture with dependency injection
 - Unit and integration tests
 - Docker & Docker Compose
@@ -78,15 +80,17 @@ task lint
 
 ## API Endpoints
 
-| Method | Endpoint         | Description            | Auth |
-| ------ | ---------------- | ---------------------- | ---- |
-| POST   | /auth/register   | Create account         | No   |
-| POST   | /auth/login      | Login (returns tokens) | No   |
-| POST   | /auth/refresh    | Refresh access token   | No   |
-| POST   | /auth/logout     | Revoke refresh token   | No   |
-| POST   | /auth/logout-all | Revoke all tokens      | Yes  |
-| GET    | /auth/me         | Get current user       | Yes  |
-| GET    | /health          | Health check           | No   |
+| Method | Endpoint                      | Description                  | Auth |
+| ------ | ----------------------------- | ---------------------------- | ---- |
+| POST   | /auth/register                | Create account               | No   |
+| POST   | /auth/login                   | Login (returns tokens)       | No   |
+| POST   | /auth/refresh                 | Refresh access token         | No   |
+| POST   | /auth/logout                  | Revoke refresh token         | No   |
+| POST   | /auth/logout-all              | Revoke all tokens            | Yes  |
+| GET    | /auth/me                      | Get current user             | Yes  |
+| POST   | /auth/session/revoke          | Revoke a specific session    | Yes  |
+| GET    | /auth/session/active-sessions | Get all active sessions      | Yes  |
+| GET    | /health                       | Health check                 | No   |
 
 ### Examples
 
@@ -114,6 +118,16 @@ curl -X POST http://localhost:8080/auth/logout \
 # Get current user (with access token)
 curl http://localhost:8080/auth/me \
   -H "Authorization: Bearer <access_token>"
+
+# Get active sessions
+curl http://localhost:8080/auth/session/active-sessions \
+  -H "Authorization: Bearer <access_token>"
+
+# Revoke a specific session
+curl -X POST http://localhost:8080/auth/session/revoke \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": 1}'
 ```
 
 ## Environment Variables
