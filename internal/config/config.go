@@ -43,12 +43,6 @@ type ServerConfig struct {
 	GinMode string
 }
 
-type redis struct {
-	Host     string
-	Port     int
-	Password string
-}
-
 // Load loads configuration from environment variables.
 func Load() (*Config, error) {
 	// Load .env file if it exists (ignore error if not found).
