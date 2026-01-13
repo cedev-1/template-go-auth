@@ -33,8 +33,8 @@ func AuthMiddleware(jwtCfg config.JWTConfig) gin.HandlerFunc {
 		tokenString := parts[1]
 
 		// Parse and validate the token.
+		// all check JWT claims
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			// Validate signing method.
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
 			}
@@ -48,19 +48,55 @@ func AuthMiddleware(jwtCfg config.JWTConfig) gin.HandlerFunc {
 			return
 		}
 
-		// Extract claims and set in context.
-		// Feature add more check claims
-		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			userID, ok := claims["user_id"].(float64)
-			if !ok {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": "invalid token claims",
-				})
-				return
-			}
-			c.Set("user_id", uint(userID))
-			c.Set("email", claims["email"])
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid token claims",
+			})
+			return
 		}
+
+		userIDRaw, ok := claims["user_id"]
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid user_id claim",
+			})
+			return
+		}
+		userID, ok := userIDRaw.(float64)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid user_id type",
+			})
+			return
+		}
+
+		email, ok := claims["email"]
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "missing email claim",
+			})
+			return
+		}
+
+		if _, ok := claims["exp"]; !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid exp claim",
+			})
+			return
+		}
+
+		if _, ok := claims["iat"]; !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid iat claim",
+			})
+			return
+		}
+
+		c.Set("user_id", uint(userID))
+		c.Set("email", email)
+		c.Set("exp", claims["exp"])
+		c.Set("iat", claims["iat"])
 
 		c.Next()
 	}
