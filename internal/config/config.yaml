@@ -1,0 +1,2 @@
+redis: false
+jwt_sync_with_redis: false

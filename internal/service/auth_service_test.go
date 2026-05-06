@@ -63,15 +63,12 @@ func TestAuthService_Register_Success(t *testing.T) {
 	password := "password123"
 	hashedPassword := "hashed_password"
 
-	// Setup expectations
 	mockRepo.On("FindByEmail", ctx, email).Return(nil, domain.ErrUserNotFound)
 	mockHasher.On("Hash", password).Return(hashedPassword, nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*domain.User")).Return(nil)
 
-	// Execute
 	user, err := service.Register(ctx, email, password)
 
-	// Assert
 	assert.NoError(t, err)
 	assert.NotNil(t, user)
 	assert.Equal(t, email, user.Email)
@@ -240,7 +237,6 @@ func TestAuthService_GetUserByID_NotFound(t *testing.T) {
 	ctx := context.Background()
 	userID := uint(999)
 
-	// Setup expectations
 	mockRepo.On("FindByID", ctx, userID).Return(nil, domain.ErrUserNotFound)
 
 	// Execute

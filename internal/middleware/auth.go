@@ -2,16 +2,37 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cedev-1/template-go-auth/internal/config"
+	"github.com/cedev-1/template-go-auth/internal/repository"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// AuthMiddlewareConfig holds the configuration for the auth middleware.
+type AuthMiddlewareConfig struct {
+	JWTConfig        config.JWTConfig
+	SessionRepo      repository.SessionRepository
+	RedisEnabled     bool
+	JWTSyncWithRedis bool
+}
+
 // AuthMiddleware creates a JWT authentication middleware.
 func AuthMiddleware(jwtCfg config.JWTConfig) gin.HandlerFunc {
+	return AuthMiddlewareWithConfig(AuthMiddlewareConfig{
+		JWTConfig:        jwtCfg,
+		SessionRepo:      nil,
+		RedisEnabled:     false,
+		JWTSyncWithRedis: false,
+	})
+}
+
+// AuthMiddlewareWithConfig creates a JWT authentication middleware with Redis session validation.
+func AuthMiddlewareWithConfig(cfg AuthMiddlewareConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -32,13 +53,11 @@ func AuthMiddleware(jwtCfg config.JWTConfig) gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		// Parse and validate the token.
-		// all check JWT claims
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
 			}
-			return []byte(jwtCfg.Secret), nil
+			return []byte(cfg.JWTConfig.Secret), nil
 		})
 
 		if err != nil || !token.Valid {
@@ -93,13 +112,55 @@ func AuthMiddleware(jwtCfg config.JWTConfig) gin.HandlerFunc {
 			return
 		}
 
+		tokenFamily, _ := claims["token_family"].(string)
+
+		//Check Redis and active session
+		if cfg.RedisEnabled && cfg.JWTSyncWithRedis && cfg.SessionRepo != nil {
+			if tokenFamily == "" {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"error": "missing token_family claim",
+				})
+				return
+			}
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+			defer cancel()
+
+			exists, err := cfg.SessionRepo.SessionExists(ctx, uint(userID), tokenFamily)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+					"error": "failed to validate session",
+				})
+				return
+			}
+
+			if !exists {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+					"error": "session has been revoked",
+				})
+				return
+			}
+		}
+
 		c.Set("user_id", uint(userID))
 		c.Set("email", email)
 		c.Set("exp", claims["exp"])
 		c.Set("iat", claims["iat"])
+		if tokenFamily != "" {
+			c.Set("token_family", tokenFamily)
+		}
 
 		c.Next()
 	}
+}
+
+// GetTokenFamily extracts the token family from the gin context.
+func GetTokenFamily(c *gin.Context) (string, bool) {
+	tokenFamily, exists := c.Get("token_family")
+	if !exists {
+		return "", false
+	}
+	family, ok := tokenFamily.(string)
+	return family, ok
 }
 
 // GetUserID extracts the user ID from the gin context.

@@ -8,6 +8,21 @@ import (
 	"github.com/cedev-1/template-go-auth/internal/domain"
 )
 
+// SessionRepository defines the interface for session data access in Redis.
+type SessionRepository interface {
+	CreateSession(ctx context.Context, session *domain.Session) error
+	GetSession(ctx context.Context, userID uint, tokenFamily string) (*domain.Session, error)
+	UpdateSession(ctx context.Context, session *domain.Session) error
+	DeleteSession(ctx context.Context, userID uint, tokenFamily string) error
+	DeleteAllUserSessions(ctx context.Context, userID uint) error
+	GetUserSessions(ctx context.Context, userID uint) ([]*domain.Session, error)
+	SessionExists(ctx context.Context, userID uint, tokenFamily string) (bool, error)
+	StoreJWT(ctx context.Context, userID uint, tokenFamily string, accessToken string, expiry time.Duration) error
+	ValidateJWT(ctx context.Context, userID uint, tokenFamily string) (bool, error)
+	InvalidateJWT(ctx context.Context, userID uint, tokenFamily string) error
+	RefreshSession(ctx context.Context, session *domain.Session, newAccessToken string, jwtExpiry time.Duration) error
+}
+
 // UserRepository defines the interface for user data access.
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cedev-1/template-go-auth/internal/domain"
+	"github.com/cedev-1/template-go-auth/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -27,9 +28,20 @@ func (m *MockAuthService) Register(ctx context.Context, email, password string) 
 	return args.Get(0).(*domain.User), args.Error(1)
 }
 
-func (m *MockAuthService) Login(ctx context.Context, email, password string) (string, error) {
+func (m *MockAuthService) Login(ctx context.Context, email, password string) (*service.TokenPair, error) {
 	args := m.Called(ctx, email, password)
-	return args.String(0), args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.TokenPair), args.Error(1)
+}
+
+func (m *MockAuthService) Refresh(ctx context.Context, refreshToken string) (*service.TokenPair, error) {
+	args := m.Called(ctx, refreshToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*service.TokenPair), args.Error(1)
 }
 
 func (m *MockAuthService) GetUserByID(ctx context.Context, id uint) (*domain.User, error) {
@@ -38,6 +50,34 @@ func (m *MockAuthService) GetUserByID(ctx context.Context, id uint) (*domain.Use
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*domain.User), args.Error(1)
+}
+
+func (m *MockAuthService) GetActiveSessions(ctx context.Context, userID uint) ([]*service.SessionInfo, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*service.SessionInfo), args.Error(1)
+}
+
+func (m *MockAuthService) ValidateSession(ctx context.Context, userID uint, tokenFamily string) (bool, error) {
+	args := m.Called(ctx, userID, tokenFamily)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockAuthService) RevokeSession(ctx context.Context, userID, tokenID uint) error {
+	args := m.Called(ctx, userID, tokenID)
+	return args.Error(0)
+}
+
+func (m *MockAuthService) LogoutAll(ctx context.Context, userID uint) error {
+	args := m.Called(ctx, userID)
+	return args.Error(0)
+}
+
+func (m *MockAuthService) Logout(ctx context.Context, refreshToken string) error {
+	args := m.Called(ctx, refreshToken)
+	return args.Error(0)
 }
 
 func setupRouter(handler *AuthHandler) *gin.Engine {
@@ -161,14 +201,14 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 
 	email := "test@example.com"
 	password := "password123"
-	expectedToken := "jwt.token.here"
-
-	mockService.On("Login", mock.Anything, email, password).Return(expectedToken, nil)
-
-	reqBody := LoginRequest{
-		Email:    email,
-		Password: password,
+	expectedPair := &service.TokenPair{
+		AccessToken:  "access.jwt.token",
+		RefreshToken: "refresh-token-here",
 	}
+
+	mockService.On("Login", mock.Anything, email, password).Return(expectedPair, nil)
+
+	reqBody := LoginRequest{Email: email, Password: password}
 	body, _ := json.Marshal(reqBody)
 
 	req, _ := http.NewRequest(http.MethodPost, "/auth/login", bytes.NewBuffer(body))
@@ -179,10 +219,11 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var response map[string]interface{}
+	var response TokenResponse
 	err := json.Unmarshal(rec.Body.Bytes(), &response)
 	assert.NoError(t, err)
-	assert.Equal(t, expectedToken, response["token"])
+	assert.Equal(t, expectedPair.AccessToken, response.AccessToken)
+	assert.Equal(t, expectedPair.RefreshToken, response.RefreshToken)
 
 	mockService.AssertExpectations(t)
 }

@@ -17,6 +17,7 @@ type AuthService interface {
 	GetUserByID(ctx context.Context, id uint) (*domain.User, error)
 	RevokeSession(ctx context.Context, userID, tokenID uint) error
 	GetActiveSessions(ctx context.Context, userID uint) ([]*SessionInfo, error)
+	ValidateSession(ctx context.Context, userID uint, tokenFamily string) (bool, error)
 }
 
 // TokenPair contains access and refresh tokens.

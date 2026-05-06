@@ -28,6 +28,7 @@ type Container struct {
 	RedisClient *redis.Client
 	Router      *gin.Engine
 	AuthHandler *handler.AuthHandler
+	SessionRepo repository.SessionRepository
 }
 
 // New creates a new dependency injection container.
@@ -40,11 +41,18 @@ func New(cfg *config.Config) (*Container, error) {
 	if err := container.initDatabase(); err != nil {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
-	// Initialize Redis.
-	if err := container.initRedis(); err != nil {
-		return nil, fmt.Errorf("failed to initialize Redis: %w", err)
-	}
 
+	// Initialize Redis only if enabled.
+	if cfg.RedisEnabled {
+		if err := container.initRedis(); err != nil {
+			return nil, fmt.Errorf("failed to initialize Redis: %w", err)
+		}
+	} else {
+		log.Println("Redis is disabled in configuration")
+		if cfg.JWTSyncWithRedis {
+			return nil, fmt.Errorf("jwt_sync_with_redis is enabled but redis is disabled")
+		}
+	}
 	// Initialize all dependencies.
 	container.initDependencies()
 
@@ -53,7 +61,6 @@ func New(cfg *config.Config) (*Container, error) {
 
 // initDatabase initializes the database connection and runs migrations.
 func (c *Container) initDatabase() error {
-	// Configure GORM logger.
 	gormLogger := logger.Default.LogMode(logger.Silent)
 	if c.Config.Server.GinMode == "debug" {
 		gormLogger = logger.Default.LogMode(logger.Info)
@@ -77,6 +84,7 @@ func (c *Container) initDatabase() error {
 	return nil
 }
 
+// initRedis initializes Redis connection.
 func (c *Container) initRedis() error {
 	opt := &redis.Options{
 		Addr:     fmt.Sprintf("%s:%d", c.Config.Redis.Host, c.Config.Redis.Port),
@@ -95,6 +103,10 @@ func (c *Container) initRedis() error {
 
 	c.RedisClient = client
 	log.Println("Redis connected successfully")
+
+	if c.Config.JWTSyncWithRedis {
+		log.Println("JWT tokens will be synced with Redis")
+	}
 	return nil
 }
 
@@ -107,11 +119,25 @@ func (c *Container) initDependencies() {
 	userRepo := repository.NewUserRepository(c.DB)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(c.DB)
 
+	// Create session repository if Redis is enabled.
+	if c.Config.RedisEnabled && c.RedisClient != nil {
+		c.SessionRepo = repository.NewSessionRepository(c.RedisClient)
+		log.Println("Session repository initialized with Redis")
+	}
+
 	// Create utilities.
 	hasher := password.NewHasher()
 
 	// Create services.
-	authService := service.NewAuthService(userRepo, refreshTokenRepo, hasher, c.Config.JWT)
+	authService := service.NewAuthService(
+		userRepo,
+		refreshTokenRepo,
+		c.SessionRepo,
+		hasher,
+		c.Config.JWT,
+		c.Config.RedisEnabled,
+		c.Config.JWTSyncWithRedis,
+	)
 
 	// Create handlers.
 	c.AuthHandler = handler.NewAuthHandler(authService)
@@ -143,16 +169,24 @@ func (c *Container) setupRouter() *gin.Engine {
 		auth.POST("/logout", c.AuthHandler.Logout)
 	}
 
+	// Create middleware config for protected routes.
+	authMiddlewareCfg := middleware.AuthMiddlewareConfig{
+		JWTConfig:        c.Config.JWT,
+		SessionRepo:      c.SessionRepo,
+		RedisEnabled:     c.Config.RedisEnabled,
+		JWTSyncWithRedis: c.Config.JWTSyncWithRedis,
+	}
+
 	// Protected routes.
 	protected := router.Group("/auth")
-	protected.Use(middleware.AuthMiddleware(c.Config.JWT))
+	protected.Use(middleware.AuthMiddlewareWithConfig(authMiddlewareCfg))
 	{
 		protected.GET("/me", c.AuthHandler.Me)
 		protected.POST("/logout-all", c.AuthHandler.LogoutAll)
 	}
 
 	protected_sessions := router.Group("/auth/session")
-	protected_sessions.Use(middleware.AuthMiddleware(c.Config.JWT))
+	protected_sessions.Use(middleware.AuthMiddlewareWithConfig(authMiddlewareCfg))
 	{
 		protected_sessions.POST("/revoke", c.AuthHandler.RevokeSession)
 		protected_sessions.GET("/active-sessions", c.AuthHandler.GetSessions)
@@ -163,6 +197,14 @@ func (c *Container) setupRouter() *gin.Engine {
 
 // Close closes all resources.
 func (c *Container) Close() error {
+	// Close Redis if initialized
+	if c.RedisClient != nil {
+		if err := c.RedisClient.Close(); err != nil {
+			log.Printf("Error closing Redis: %v", err)
+		}
+	}
+
+	// Close database
 	sqlDB, err := c.DB.DB()
 	if err != nil {
 		return err
